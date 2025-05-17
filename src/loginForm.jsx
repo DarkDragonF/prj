@@ -1,29 +1,39 @@
 import React, { useState } from "react";
 
 function LoginForm({ onLogin }) {
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
 
+  const API_LOGIN = (typeof process !== "undefined" && process.env.REACT_APP_API_URL)
+    ? `${process.env.REACT_APP_API_URL}/auth/login`
+    : "http://localhost:3000/api/auth/login";
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-
-    // Sau này bạn sẽ gọi API ở đây
-    if (!email || !password) {
-      setError("Vui lòng nhập đầy đủ email và mật khẩu.");
+    if (!username || !password) {
+      setError("Vui lòng nhập đầy đủ tên đăng nhập và mật khẩu.");
       return;
     }
-    
     try {
-      // Giả lập gọi API đăng nhập:
-      // const response = await axios.post('/api/login', { email, password });
-      // onLogin(response.data);
-
-      console.log("Đăng nhập với:", { email, password });
-
-      // Gọi hàm callback sau khi đăng nhập thành công
-      onLogin?.({ email, role: "staff" }); // giả sử mặc định là nhân viên
+      const res = await fetch(API_LOGIN, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password })
+      });
+      if (!res.ok) {
+        const errMsg = await res.text();
+        console.error("Login failed:", errMsg);
+        throw new Error("Đăng nhập thất bại");
+      }
+      const data = await res.json();
+      console.log("Login success data:", data);
+      localStorage.setItem("token", data.token);
+      const payload = JSON.parse(atob(data.token.split('.')[1]));
+      // Truyền token, role, leaderId cho onLogin
+      onLogin?.({ username, role: payload.role, token: data.token, leaderId: data.leaderId });
     } catch (err) {
+      console.error(err);
       setError("Đăng nhập thất bại. Vui lòng thử lại.");
     }
   };
@@ -37,13 +47,13 @@ function LoginForm({ onLogin }) {
 
           <form onSubmit={handleSubmit}>
             <div className="mb-3">
-              <label className="form-label">Email hoặc tên đăng nhập</label>
+              <label className="form-label">Tên đăng nhập</label>
               <input
-                type="email"
+                type="text"
                 className="form-control"
-                placeholder="example@email.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                placeholder="Tên đăng nhập"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
               />
             </div>
             <div className="mb-3">

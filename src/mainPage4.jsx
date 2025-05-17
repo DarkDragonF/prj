@@ -8,10 +8,14 @@ const initialEmployees = [
   { id: 5, title: "Đỗ Văn F", date: "15/04/2024", completed: true, note: "" }
 ];
 
-const API_EVENTS = "http://localhost:3000/api/events";
-const API_EMPLOYEES = "http://localhost:3000/api/quanly";
+// Replace API endpoints with environment variable based base URL
+const API_BASE = (typeof process !== "undefined" && process.env.REACT_APP_API_URL)
+	? process.env.REACT_APP_API_URL
+	: "http://localhost:3000/api";
+const API_EVENTS = `${API_BASE}/events`;
+const API_EMPLOYEES = `${API_BASE}/quanly`;
 
-function TaskBoardBootstrap4() {
+function TaskBoardBootstrap4({ onLogout }) {
   const [eventsData, setEventsData] = useState([]);
   const [detailEventId, setDetailEventId] = useState(null);
   const [showAddEventModal, setShowAddEventModal] = useState(false);
@@ -49,29 +53,77 @@ function TaskBoardBootstrap4() {
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [showSubTaskDetailModal, setShowSubTaskDetailModal] = useState(false);
   const [selectedSubTask, setSelectedSubTask] = useState(null);
+  const [refreshFlag, setRefreshFlag] = useState(0);
+
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filteredEvents, setFilteredEvents] = useState([]);
+  const [filteredEmployees, setFilteredEmployees] = useState([]);
+
+  useEffect(() => {
+    setFilteredEvents(eventsData);
+  }, [eventsData]);
+  useEffect(() => {
+    setFilteredEmployees(employeesData);
+  }, [employeesData]);
+
+  const handleSearch = (e) => {
+    e && e.preventDefault && e.preventDefault();
+    if (currentSection === "event") {
+      if (!searchTerm.trim()) {
+        setFilteredEvents(eventsData);
+        return;
+      }
+      setFilteredEvents(
+        eventsData.filter(ev =>
+          (ev.name || "")
+            .toLowerCase()
+            .includes(searchTerm.trim().toLowerCase())
+        )
+      );
+    } else if (currentSection === "employee") {
+      if (!searchTerm.trim()) {
+        setFilteredEmployees(employeesData);
+        return;
+      }
+      setFilteredEmployees(
+        employeesData.filter(emp =>
+          (emp.title || emp.name || "")
+            .toLowerCase()
+            .includes(searchTerm.trim().toLowerCase())
+        )
+      );
+    }
+  };
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const resEvents = await fetch(API_EVENTS);
+        const token = localStorage.getItem("token");
+        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+        const resEvents = await fetch(API_EVENTS, { headers });
         const events = await resEvents.json();
-        setEventsData(events);
-        const resEmployees = await fetch(API_EMPLOYEES);
+        setEventsData(Array.isArray(events) ? events : []);
+        const resEmployees = await fetch(API_EMPLOYEES, { headers });
         const employees = await resEmployees.json();
-        setEmployeesData(employees);
+        setEmployeesData(Array.isArray(employees) ? employees : []);
       } catch (err) {
+        setEventsData([]);
+        setEmployeesData([]);
         console.error(err);
       }
     };
     fetchData();
-  }, []);
+  }, [refreshFlag]);
 
   const openAddEventModal = () => {
     setShowAddEventModal(true);
   };
 
   const addSubEventTaskRow = () => {
-    setNewEventSubTasks(prev => [...prev, { name: "", status: "pending" }]);
+    setNewEventSubTasks(prev => [
+      ...prev,
+      { name: "", status: "pending", leaderId: "", deadline: "" }
+    ]);
   };
 
   const handleSubEventTaskChange = (index, field, value) => {
@@ -97,9 +149,14 @@ function TaskBoardBootstrap4() {
   const confirmAddEvent = async () => {
     try {
       const eventToAdd = { ...newEvent, subTasks: newEventSubTasks };
+      const token = localStorage.getItem("token");
+      const headers = {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      };
       const res = await fetch(API_EVENTS, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify(eventToAdd)
       });
       const data = await res.json();
@@ -159,6 +216,28 @@ function TaskBoardBootstrap4() {
     setShowAddEmployeeModal(false);
   };
 
+  const handleManagerSubTaskStatus = async (eventId, subTaskName, leaderId, checked) => {
+    try {
+      const token = localStorage.getItem("token");
+      await fetch(
+        `${API_EVENTS}/leader/${leaderId}/subtask-status`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            eventId,
+            subTaskName,
+            status: checked ? "done" : "pending",
+          }),
+        }
+      );
+      setRefreshFlag(f => f + 1);
+    } catch {}
+  };
+
   return (
     <>
       <style>{`
@@ -205,15 +284,26 @@ function TaskBoardBootstrap4() {
         {/* Main Content */}
         <div className="flex-grow-1 p-3 bg-light overflow-auto">
           {/* Search Area */}
-          <div className="d-flex justify-content-between align-items-center mb-3">
+          <form
+            className="d-flex justify-content-between align-items-center mb-3"
+            onSubmit={handleSearch}
+          >
             <div className="input-group">
               <span className="input-group-text bg-white border-end-0">
                 <i className="bi bi-search"></i>
               </span>
-              <input type="text" className="form-control border-start-0" placeholder={
-                currentSection === "employee" ? "Tìm kiếm nhân sự..." : "Tìm kiếm sự kiện..."
-              } />
-              <button className="btn btn-secondary ms-2 me-3" style={{ padding: "10px 20px", borderRadius: "5px" }}>
+              <input
+                type="text"
+                className="form-control border-start-0"
+                placeholder={currentSection === "employee" ? "Tìm kiếm nhân sự..." : "Tìm kiếm sự kiện..."}
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+              />
+              <button
+                className="btn btn-secondary ms-2 me-3"
+                style={{ padding: "10px 20px", borderRadius: "5px" }}
+                type="submit"
+              >
                 Tìm
               </button>
             </div>
@@ -227,10 +317,12 @@ function TaskBoardBootstrap4() {
                 <li className="px-3 pt-2 pb-1 text-muted small">Quản lý tài khoản</li>
                 <li><hr className="dropdown-divider" /></li>
                 <li><a className="dropdown-item" href="#">Quản lý tài khoản</a></li>
-                <li><a className="dropdown-item text-danger" href="#">Đăng xuất</a></li>
+                <li>
+                  <button className="dropdown-item text-danger" onClick={onLogout}>Đăng xuất</button>
+                </li>
               </ul>
             </div>
-          </div>
+          </form>
 
           {/* Conditional section rendering */}
           {currentSection === "" ? (
@@ -244,50 +336,54 @@ function TaskBoardBootstrap4() {
                 Thêm nhân sự mới
               </button>
               <div className="border p-3 rounded bg-white mt-3">
-                <ul className="list-unstyled">
-                  {employeesData.map(emp => (
-                    <li key={emp.id} className="mb-3 border-bottom pb-2">
-                      <div className="d-flex justify-content-between align-items-center">
-                        <div>
-                          <strong>{emp.title}</strong>
-                          <span className="text-muted ms-2">(Ngày vào làm: {emp.date})</span>
+                {(!Array.isArray(filteredEmployees) || filteredEmployees.length === 0) ? (
+                  <div className="alert alert-warning mb-0">Không có nhân sự nào hoặc bạn không có quyền truy cập.</div>
+                ) : (
+                  <ul className="list-unstyled">
+                    {filteredEmployees.map(emp => (
+                      <li key={emp.id || emp._id} className="mb-3 border-bottom pb-2">
+                        <div className="d-flex justify-content-between align-items-center">
+                          <div>
+                            <strong>{emp.title || emp.name || "(Không có tên)"}</strong>
+                            <span className="text-muted ms-2">(Ngày vào làm: {emp.date || ""})</span>
+                          </div>
+                          <div>
+                            <button className="btn btn-danger btn-sm me-2">Xóa nhân sự</button>
+                            <button className="btn btn-primary btn-sm">+</button>
+                          </div>
                         </div>
-                        <div>
-                          <button className="btn btn-danger btn-sm me-2">Xóa nhân sự</button>
-                          <button className="btn btn-primary btn-sm">+</button>
-                        </div>
-                      </div>
-                      {/* Employee Additional Info */}
-                      <ul className="list-unstyled ms-3 mt-2">
-                        {(emp.subTasks || [])?.map((sub, index) => {
-                          const key = `${emp.id}-${index}`;
-                          return (
-                            <React.Fragment key={key}>
-                              <li className="d-flex justify-content-between align-items-center mt-2" style={{ cursor: "pointer" }} onClick={() => toggleEmployeeSubTask(emp.id, index)}>
-                                <span>{sub.name}</span>
-                              </li>
-                              {expandedEmployeeSubTasks[`${emp.id}-${index}`] && (
-                                <li className="ms-5 mt-1 small text-muted">
-                                  <em>Chi tiết:</em> {sub.assignee}, <em>Ghi chú:</em> {sub.time}
+                        {/* Employee Additional Info */}
+                        <ul className="list-unstyled ms-3 mt-2">
+                          {(emp.subTasks || [])?.map((sub, index) => {
+                            const key = `${emp.id || emp._id}-${index}`;
+                            return (
+                              <React.Fragment key={key}>
+                                <li className="d-flex justify-content-between align-items-center mt-2" style={{ cursor: "pointer" }} onClick={() => toggleEmployeeSubTask(emp.id || emp._id, index)}>
+                                  <span>{sub.name}</span>
                                 </li>
-                              )}
-                            </React.Fragment>
-                          );
-                        })}
-                      </ul>
-                    </li>
-                  ))}
-                </ul>
+                                {expandedEmployeeSubTasks[key] && (
+                                  <li className="ms-5 mt-1 small text-muted">
+                                    <em>Chi tiết:</em> {sub.assignee}, <em>Ghi chú:</em> {sub.time}
+                                  </li>
+                                )}
+                              </React.Fragment>
+                            );
+                          })}
+                        </ul>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             </>
           ) : currentSection === "event" && (
             <>
               {/* Display saved events */}
               <div className="mt-3">
-                {eventsData.length === 0 ? (
+                {!Array.isArray(filteredEvents) || filteredEvents.length === 0 ? (
                   <div>Không có sự kiện</div>
                 ) : (
-                  eventsData.map(ev => (
+                  filteredEvents.map(ev => (
                     <div key={ev.id} className="card mb-2">
                       <div className="card-body">
                         <h6 className="card-title">{ev.name}</h6>
@@ -314,7 +410,7 @@ function TaskBoardBootstrap4() {
       {/* Add Event Modal */}
       {showAddEventModal && (
         <div className="modal-overlay">
-          <div className="modal-content">
+          <div className="modal-content" style={{ maxWidth: 600 }}>
             <h5>Tạo Sự Kiện</h5>
             <div className="mb-3">
               <input type="text" className="form-control" placeholder="Tiêu đề" value={newEvent.name}
@@ -344,10 +440,32 @@ function TaskBoardBootstrap4() {
             <div className="mb-3">
               <h6>Công việc sự kiện</h6>
               {newEventSubTasks.map((sub, index) => (
-                <div key={index} className="mb-2 d-flex align-items-center">
-                  <input type="text" className="form-control" placeholder="Tên công việc" value={sub.name}
-                    onChange={(e) => handleSubEventTaskChange(index, "name", e.target.value)} />
-                  <button type="button" className="btn btn-sm btn-warning mx-1"
+                <div key={index} className="mb-2 d-flex align-items-center gap-2">
+                  <input
+                    type="text"
+                    className="form-control"
+                    placeholder="Tên công việc"
+                    value={sub.name}
+                    onChange={e => handleSubEventTaskChange(index, "name", e.target.value)}
+                    style={{ minWidth: 120 }}
+                  />
+                  <input
+                    type="text"
+                    className="form-control"
+                    placeholder="Mã quản lý (leaderId)"
+                    value={sub.leaderId || ""}
+                    onChange={e => handleSubEventTaskChange(index, "leaderId", e.target.value)}
+                    style={{ minWidth: 120 }}
+                  />
+                  <input
+                    type="text"
+                    className="form-control"
+                    placeholder="Hạn (deadline, ví dụ: 2024-07-01)"
+                    value={sub.deadline || ""}
+                    onChange={e => handleSubEventTaskChange(index, "deadline", e.target.value)}
+                    style={{ minWidth: 120 }}
+                  />
+                  <button type="button" className="btn btn-sm btn-warning"
                     onClick={() => toggleSubEventTaskStatus(index)}>
                     {sub.status === "pending" ? "Chưa xong" : "Đã xong"}
                   </button>
@@ -410,7 +528,7 @@ function TaskBoardBootstrap4() {
       {/* Event Detail Modal */}
       {showEventDetailModal && selectedEvent && (
         <div className="modal-overlay">
-          <div className="modal-content" style={{ position: "relative" }}>
+          <div className="modal-content" style={{ position: "relative", maxWidth: 600 }}>
             {/* New close icon button */}
             <button 
               style={{ position: "absolute", top: "10px", right: "10px" }}
@@ -422,48 +540,117 @@ function TaskBoardBootstrap4() {
             >
               X
             </button>
-            <h5>Thông tin chi tiết sự kiện</h5>
+            <h5 className="mb-3 text-center">Thông tin chi tiết sự kiện</h5>
             <form>
-              <div className="mb-3">
-                <label className="form-label"><strong>Tiêu đề</strong></label>
-                <input type="text" className="form-control" value={selectedEvent.name} readOnly />
+              <div className="mb-3 row">
+                <label className="col-sm-4 col-form-label"><strong>Tiêu đề</strong></label>
+                <div className="col-sm-8">
+                  <input type="text" className="form-control" value={selectedEvent.name} readOnly />
+                </div>
               </div>
-              <div className="mb-3">
-                <label className="form-label"><strong>Ngày bắt đầu</strong></label>
-                <input type="text" className="form-control" value={selectedEvent.startDate} readOnly />
+              <div className="mb-3 row">
+                <label className="col-sm-4 col-form-label"><strong>Ngày bắt đầu</strong></label>
+                <div className="col-sm-8">
+                  <input type="text" className="form-control" value={selectedEvent.startDate} readOnly />
+                </div>
               </div>
-              <div className="mb-3">
-                <label className="form-label"><strong>Ngày kết thúc</strong></label>
-                <input type="text" className="form-control" value={selectedEvent.endDate} readOnly />
+              <div className="mb-3 row">
+                <label className="col-sm-4 col-form-label"><strong>Ngày kết thúc</strong></label>
+                <div className="col-sm-8">
+                  <input type="text" className="form-control" value={selectedEvent.endDate} readOnly />
+                </div>
               </div>
-              <div className="mb-3">
-                <label className="form-label"><strong>Quy mô sự kiện</strong></label>
-                <input type="text" className="form-control" value={selectedEvent.eventScale} readOnly />
+              <div className="mb-3 row">
+                <label className="col-sm-4 col-form-label"><strong>Quy mô sự kiện</strong></label>
+                <div className="col-sm-8">
+                  <input type="text" className="form-control" value={selectedEvent.eventScale} readOnly />
+                </div>
               </div>
-              <div className="mb-3">
-                <label className="form-label"><strong>Địa điểm tổ chức</strong></label>
-                <input type="text" className="form-control" value={selectedEvent.eventLocation} readOnly />
+              <div className="mb-3 row">
+                <label className="col-sm-4 col-form-label"><strong>Địa điểm tổ chức</strong></label>
+                <div className="col-sm-8">
+                  <input type="text" className="form-control" value={selectedEvent.eventLocation} readOnly />
+                </div>
               </div>
               {selectedEvent.subTasks && selectedEvent.subTasks.length > 0 && (
                 <div className="mb-3">
-                  <h6>Công việc sự kiện</h6>
-                  <ul className="list-group">
-                    {selectedEvent.subTasks.map((sub, idx) => (
-                      <li key={idx} className="list-group-item d-flex justify-content-between align-items-center">
-                        <span>{sub.name} ({sub.status})</span>
-                        <button
-                          type="button"
-                          className="btn btn-info btn-sm"
-                          onClick={() => {
-                            setSelectedSubTask(sub);
-                            setShowSubTaskDetailModal(true);
-                          }}
-                        >
-                          Xem chi tiết
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+                  <h6 className="mb-2">Công việc sự kiện</h6>
+                  <table className="table table-bordered table-sm align-middle">
+                    <thead className="table-light">
+                      <tr>
+                        <th style={{width: "30%"}}>Tên công việc</th>
+                        <th style={{width: "20%"}}>Mã quản lý</th>
+                        <th style={{width: "20%"}}>Trạng thái</th>
+                        <th style={{width: "20%"}}>Đánh dấu</th>
+                        <th style={{width: "10%"}}>Chi tiết</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedEvent.subTasks.map((sub, idx) => (
+                        <React.Fragment key={idx}>
+                          <tr>
+                            <td>{sub.name}</td>
+                            <td>{sub.leaderId || <span className="text-muted">-</span>}</td>
+                            <td>
+                              <span className={`badge ${sub.status === "done" ? "bg-success" : "bg-warning text-dark"}`}>
+                                {sub.status === "done" ? "Đã xong" : "Chưa xong"}
+                              </span>
+                            </td>
+                            <td>
+                              <input
+                                type="checkbox"
+                                checked={sub.status === "done"}
+                                onChange={e =>
+                                  handleManagerSubTaskStatus(
+                                    selectedEvent._id,
+                                    sub.name,
+                                    sub.leaderId,
+                                    e.target.checked
+                                  )
+                                }
+                                title="Đánh dấu hoàn thành"
+                              />
+                            </td>
+                            <td>
+                              <button
+                                type="button"
+                                className="btn btn-info btn-sm"
+                                onClick={() => {
+                                  setSelectedSubTask(sub);
+                                  setShowSubTaskDetailModal(true);
+                                }}
+                              >
+                                Xem chi tiết
+                              </button>
+                            </td>
+                          </tr>
+                          {/* Hiển thị công việc con của subtask này nếu có */}
+                          {Array.isArray(sub.employeeTasks) && sub.employeeTasks.length > 0 && (
+                            <tr>
+                              <td colSpan={5} style={{ background: "#f8fafd", borderLeft: "4px solid #0d6efd" }}>
+                                <div className="fw-bold text-primary mb-1" style={{ fontSize: "0.98em" }}>
+                                  Công việc con được leader giao cho nhân viên:
+                                </div>
+                                <ul className="mb-0 ps-3" style={{ listStyle: "circle" }}>
+                                  {sub.employeeTasks.map((empTask, empIdx) => (
+                                    <li key={empTask.name + empIdx} style={{ fontSize: "0.97em", marginBottom: "2px" }}>
+                                      <span className="fw-semibold text-dark">{empTask.name}</span>
+                                      {empTask.time && (
+                                        <span className="ms-2 text-muted small">({empTask.time})</span>
+                                      )}
+                                      {empTask.employeeId && (
+                                        <span className="ms-2 badge bg-info text-dark">Mã NV: {empTask.employeeId}</span>
+                                      )}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </form>
@@ -491,75 +678,7 @@ function TaskBoardBootstrap4() {
             </button>
             <h5>Chi tiết công việc</h5>
             <div className="subtask-details">
-              <div className="detail-section">
-                <p>
-                  <strong>Báo cáo kết quả kinh doanh Q1 (15/04/2024)</strong> 
-                </p>
-                <p>
-                  - Tổng hợp doanh thu
-                </p>
-                <p>
-                  - Viết báo cáo
-                </p>
-                <p>
-                  <strong>Tên nhân viên:</strong> Lưu Thị K, <strong>Thời gian:</strong> 02:30 PM
-                </p>
-              </div>
-              <hr />
-              <div className="detail-section">
-                <p>
-                  <strong>Chuẩn bị sự kiện Hội thảo khách hàng (22/04/2024)</strong>
-                </p>
-                <p>
-                  - Chuẩn bị slide trình bày
-                </p>
-                <p>
-                  - Đặt phòng hội thảo
-                </p>
-                <p>
-                  <strong>Tên nhân viên:</strong> Nguyễn Văn A, <strong>Thời gian:</strong> 10:00 AM
-                </p>
 
-              </div>
-              <hr />
-              <div className="detail-section">
-                <p>
-                  <strong>Họp với đối tác chiến lược (23/04/2024)</strong>
-                </p>
-                <p>
-                  - Soạn thảo hợp đồng
-                </p>
-                <p>
-                  - Chuẩn bị tài liệu trình bày
-                </p>
-              </div>
-              <hr />
-              <div className="detail-section">
-                <p>
-                  <strong>Tổ chức buổi đào tạo nội bộ (25/04/2024)</strong>
-                </p>
-                <p>
-                  - Thông báo tới nhân viên
-                </p>
-                <p>
-                  - Chuẩn bị tài liệu đào tạo
-                </p>
-              </div>
-              <hr />
-              <div className="detail-section">
-                <p>
-                  <strong>Xây dựng kế hoạch marketing quý 2 (01/05/2024)</strong> - Hoàn thành
-                </p>
-                <p>
-                  Hoàn thành | <strong>Xóa Công Việc</strong> | +
-                </p>
-                <p>
-                  <strong>Thu thập dữ liệu thị trường</strong> | <strong>Xóa</strong>
-                </p>
-                <p>
-                  <strong>Phân tích đối thủ cạnh tranh</strong> | <strong>Xóa</strong>
-                </p>
-              </div>
             </div>
             <div className="d-flex justify-content-end mt-3">
               <button

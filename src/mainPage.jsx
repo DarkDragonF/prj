@@ -6,16 +6,20 @@ function TaskBoardBootstrap1() {
   const [error, setError] = useState(null);
   const [stateModal, setStateModal] = useState({ show: false, taskId: null });
   const [noteModal, setNoteModal] = useState({ show: false, taskId: null, note: "" });
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filteredTasks, setFilteredTasks] = useState([]);
+  const [employeeSubTasks, setEmployeeSubTasks] = useState([]);
 
-  const API_BASE = "http://localhost:5000/api";
-  const token = localStorage.getItem("token"); // Giả sử token lưu sau khi đăng nhập
+  const API_BASE = (typeof process !== "undefined" && process.env.REACT_APP_API_URL)
+    ? process.env.REACT_APP_API_URL
+    : "http://localhost:3000/api";
+  const token = localStorage.getItem("token");
 
-  // Fetch tasks from backend on mount
   useEffect(() => {
     async function fetchTasks() {
       setLoading(true);
       try {
-        const res = await fetch(`${API_BASE}/tasks/assigned`, {
+        const res = await fetch("http://localhost:3000/api/tasks/assigned", {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (!res.ok) throw new Error("Không thể tải công việc");
@@ -28,9 +32,62 @@ function TaskBoardBootstrap1() {
       setLoading(false);
     }
     fetchTasks();
+
+    async function fetchEmployeeSubTasks() {
+      const token = localStorage.getItem("token");
+      let employeeId = null;
+      try {
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        employeeId = payload.employeeId || localStorage.getItem("employeeId");
+      } catch {}
+      if (!employeeId) return;
+      const res = await fetch("http://localhost:3000/api/events", {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!res.ok) return;
+      const events = await res.json();
+      const result = [];
+      events.forEach(ev => {
+        (ev.subTasks || []).forEach(sub => {
+          if (Array.isArray(sub.employeeTasks)) {
+            sub.employeeTasks.forEach(empTask => {
+              if (empTask.employeeId === employeeId) {
+                result.push({
+                  eventName: ev.name,
+                  subTaskName: sub.name,
+                  name: empTask.name,
+                  deadline: empTask.deadline
+                });
+              }
+            });
+          }
+        });
+      });
+      setEmployeeSubTasks(result);
+    }
+    fetchEmployeeSubTasks();
   }, [token]);
 
-  // Update task state
+  useEffect(() => {
+    setFilteredTasks(tasksData);
+  }, [tasksData]);
+
+  const handleSearch = (e) => {
+    e && e.preventDefault && e.preventDefault();
+    if (!searchTerm.trim()) {
+      setFilteredTasks(tasksData);
+      return;
+    }
+    setFilteredTasks(
+      tasksData.filter(
+        t =>
+          (t.title || "")
+            .toLowerCase()
+            .includes(searchTerm.trim().toLowerCase())
+      )
+    );
+  };
+
   const confirmStateUpdate = async () => {
     const task = tasksData.find(t => t._id === stateModal.taskId);
     if (!task) return;
@@ -54,7 +111,6 @@ function TaskBoardBootstrap1() {
 
   const cancelStateUpdate = () => setStateModal({ show: false, taskId: null });
 
-  // Update note
   const confirmNoteUpdate = async () => {
     const task = tasksData.find(t => t._id === noteModal.taskId);
     if (!task) return;
@@ -84,10 +140,14 @@ function TaskBoardBootstrap1() {
 
   const cancelNoteUpdate = () => setNoteModal({ show: false, taskId: null, note: "" });
 
+  const handleLogout = () => {
+    localStorage.removeItem("token");
+    window.location.reload();
+  };
+
   return (
     <>
       <div className="d-flex vh-100">
-        {/* Sidebar */}
         <div className="bg-success text-white p-3 rounded" style={{ width: '250px' }}>
           <h5>Quản lý công việc Cá Nhân</h5>
           <ul className="list-unstyled mt-3">
@@ -100,12 +160,20 @@ function TaskBoardBootstrap1() {
           </ul>
         </div>
 
-        {/* Main Content */}
         <div className="flex-grow-1 p-3 bg-light overflow-auto">
-          <div className="d-flex justify-content-between align-items-center mb-3">
+          <form
+            className="d-flex justify-content-between align-items-center mb-3"
+            onSubmit={handleSearch}
+          >
             <div className="input-group">
-              <input type="text" className="form-control" placeholder="Tìm kiếm công việc..." />
-              <button className="btn btn-secondary ms-2">Tìm</button>
+              <input
+                type="text"
+                className="form-control"
+                placeholder="Tìm kiếm công việc..."
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+              />
+              <button className="btn btn-secondary ms-2" type="submit">Tìm</button>
             </div>
             <div className="dropdown">
               <button className="btn btn-primary dropdown-toggle" data-bs-toggle="dropdown">
@@ -113,12 +181,13 @@ function TaskBoardBootstrap1() {
               </button>
               <ul className="dropdown-menu dropdown-menu-end">
                 <li><a className="dropdown-item" href="#">Quản lý tài khoản</a></li>
-                <li><a className="dropdown-item text-danger" href="#">Đăng xuất</a></li>
+                <li>
+                  <button className="dropdown-item text-danger" onClick={handleLogout}>Đăng xuất</button>
+                </li>
               </ul>
             </div>
-          </div>
+          </form>
 
-          {/* Task Table */}
           <div className="table-responsive">
             {loading ? (
               <div>Đang tải dữ liệu...</div>
@@ -136,9 +205,37 @@ function TaskBoardBootstrap1() {
                   </tr>
                 </thead>
                 <tbody>
-                  {tasksData.map((task) => (
+                  {filteredTasks.map((task) => (
                     <tr key={task._id}>
-                      <td>{task.completed ? "✅" : "❌"}</td>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={!!task.completed}
+                          onChange={async (e) => {
+                            try {
+                              const res = await fetch(`${API_BASE}/tasks/${task._id}/completed`, {
+                                method: "PUT",
+                                headers: {
+                                  "Content-Type": "application/json",
+                                  "Authorization": `Bearer ${token}`
+                                },
+                                body: JSON.stringify({ completed: e.target.checked })
+                              });
+                              if (!res.ok) throw new Error("Lỗi cập nhật trạng thái");
+                              const updated = await res.json();
+                              setTasksData(prev =>
+                                prev.map(t =>
+                                  t._id === task._id ? { ...t, completed: updated.completed } : t
+                                )
+                              );
+                            } catch (err) {
+                              alert("Lỗi: " + err.message);
+                            }
+                          }}
+                          title="Đánh dấu hoàn thành"
+                        />
+                        {task.completed ? "✅" : "❌"}
+                      </td>
                       <td>{task.title}</td>
                       <td>{new Date(task.deadline).toLocaleDateString()}</td>
                       <td>
@@ -162,10 +259,26 @@ function TaskBoardBootstrap1() {
               </table>
             )}
           </div>
+
+          {employeeSubTasks.length > 0 && (
+            <div className="mt-4 border p-3 rounded bg-white">
+              <h5>Công việc con được leader giao cho bạn</h5>
+              <ul className="list-unstyled">
+                {employeeSubTasks.map((task, idx) => (
+                  <li key={task.name + idx} className="mb-2">
+                    <strong>{task.name}</strong>
+                    {task.deadline && <span className="ms-2 text-muted small">({task.deadline})</span>}
+                    <div className="small text-secondary">
+                      Sự kiện: {task.eventName} | Công việc sự kiện: {task.subTaskName}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* State Modal */}
       {stateModal.show && (
         <div className="modal-overlay">
           <div className="modal-content">
@@ -179,7 +292,6 @@ function TaskBoardBootstrap1() {
         </div>
       )}
 
-      {/* Note Modal */}
       {noteModal.show && (
         <div className="modal-overlay">
           <div className="modal-content">

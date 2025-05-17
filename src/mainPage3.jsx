@@ -1,18 +1,17 @@
 import React, { useState, useEffect } from "react";
 
-const API_BASE = "http://localhost:3000/api/employees";
+// Đổi endpoint cho nhân sự từ /employees sang /quanly và sử dụng cổng 3000
+const API_EMPLOYEES_URL = (typeof process !== "undefined" && process.env.REACT_APP_API_URL)
+  ? `${process.env.REACT_APP_API_URL}/quanly`
+  : "http://localhost:3000/api/quanly";
 
 // Define initial tasks as an array with required properties
-const initialTasks = [
- 
-];
+const initialTasks = [];
 
 // Sub-tasks for each task
-const subTasksMap = {
-  
-};
+const subTasksMap = {};
 
-function TaskBoardBootstrap3() {
+function TaskBoardBootstrap3({ setActivePage, activePage }) {
   const [tasksData, setTasksData] = useState(initialTasks);
   const [stateModal, setStateModal] = useState({ show: false, taskId: null });
   const [noteModal, setNoteModal] = useState({ show: false, taskId: null, note: "" });
@@ -37,21 +36,54 @@ function TaskBoardBootstrap3() {
   const [pendingUpdateNote, setPendingUpdateNote] = useState(null);
   const [pendingDeleteEmployee, setPendingDeleteEmployee] = useState(null);
 
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filteredTasks, setFilteredTasks] = useState([]);
+
+  // Get token from localStorage
+  const token = localStorage.getItem("token");
+
   // Initial data load & periodic refresh using fetch
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const res = await fetch(API_BASE);
+        const res = await fetch(API_EMPLOYEES_URL, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) {
+          setTasksData([]);
+          return;
+        }
         const data = await res.json();
-        setTasksData(data);
+        setTasksData(Array.isArray(data) ? data : []);
       } catch (err) {
+        setTasksData([]);
         console.error("Error fetching employees:", err);
       }
     };
     fetchData();
     const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [token]);
+
+  useEffect(() => {
+    setFilteredTasks(tasksData);
+  }, [tasksData]);
+
+  const handleSearch = (e) => {
+    e && e.preventDefault && e.preventDefault();
+    if (!searchTerm.trim()) {
+      setFilteredTasks(tasksData);
+      return;
+    }
+    setFilteredTasks(
+      tasksData.filter(
+        t =>
+          (t.title || "")
+            .toLowerCase()
+            .includes(searchTerm.trim().toLowerCase())
+      )
+    );
+  };
 
   const confirmStateUpdate = () => {
     setTasksData(prev =>
@@ -75,9 +107,12 @@ function TaskBoardBootstrap3() {
   // useEffect to PUT pendingUpdateNote using fetch
   useEffect(() => {
     if (pendingUpdateNote) {
-      fetch(`${API_BASE}/${pendingUpdateNote.id}`, {
+      fetch(`${API_EMPLOYEES_URL}/${pendingUpdateNote.id}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ note: pendingUpdateNote.note })
       })
         .then(res => res.json())
@@ -94,7 +129,7 @@ function TaskBoardBootstrap3() {
           setPendingUpdateNote(null);
         });
     }
-  }, [pendingUpdateNote]);
+  }, [pendingUpdateNote, token]);
 
   const cancelNoteUpdate = () => {
     setNoteModal({ show: false, taskId: null, note: "" });
@@ -152,9 +187,12 @@ function TaskBoardBootstrap3() {
   // useEffect to POST pendingAddTask using fetch
   useEffect(() => {
     if (pendingAddTask) {
-      fetch(API_BASE, {
+      fetch(API_EMPLOYEES_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(pendingAddTask)
       })
         .then(res => res.json())
@@ -167,7 +205,7 @@ function TaskBoardBootstrap3() {
           setPendingAddTask(null);
         });
     }
-  }, [pendingAddTask]);
+  }, [pendingAddTask, token]);
 
   const cancelAddTask = () => {
     setNewTask({ title: "", date: "", completed: false, note: "", subTasks: [] });
@@ -209,8 +247,9 @@ function TaskBoardBootstrap3() {
   // useEffect to DELETE pendingDeleteEmployee using fetch
   useEffect(() => {
     if (pendingDeleteEmployee) {
-      fetch(`${API_BASE}/${pendingDeleteEmployee}`, {
-        method: "DELETE"
+      fetch(`${API_EMPLOYEES_URL}/${pendingDeleteEmployee}`, {
+        method: "DELETE",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
       })
         .then(() => {
           setTasksData(prev => prev.filter(task => task.id !== pendingDeleteEmployee));
@@ -221,7 +260,7 @@ function TaskBoardBootstrap3() {
           setPendingDeleteEmployee(null);
         });
     }
-  }, [pendingDeleteEmployee]);
+  }, [pendingDeleteEmployee, token]);
 
   return (
     <>
@@ -243,27 +282,75 @@ function TaskBoardBootstrap3() {
           width: 100%;
           box-shadow: 0 4px 12px rgba(0,0,0,0.3);
         }
+        .sidebar-item {
+          border: 2px solid transparent;
+          border-radius: 5px;
+          margin: 5px 0;
+          padding: 10px 16px;
+          transition: background 0.25s, border 0.25s, color 0.25s, box-shadow 0.25s;
+          font-weight: 500;
+          font-size: 1.1rem;
+        }
+        .sidebar-item.selected, .sidebar-item:active {
+          border: 2px solid #fff;
+          background: linear-gradient(90deg, #43e97b 0%, #38f9d7 100%);
+          color: #222;
+          box-shadow: 0 2px 12px rgba(67,233,123,0.15);
+        }
+        .sidebar-item:hover {
+          background: rgba(255,255,255,0.2);
+          color: #fff;
+          cursor: pointer;
+          box-shadow: 0 2px 8px rgba(67,233,123,0.10);
+        }
+        .fade-page {
+          animation: fadeInPage 0.5s;
+        }
+        @keyframes fadeInPage {
+          from { opacity: 0; transform: translateY(20px);}
+          to { opacity: 1; transform: translateY(0);}
+        }
       `}</style>
 
       <div className="d-flex vh-100">
         {/* Sidebar */}
         <div className="bg-success text-white p-3 rounded" style={{ width: '250px' }}>
-          <h5>Quản lý công việc nhóm</h5>
-          <ul className="list-unstyled mt-3 ">
-          <li>Quản lý công việc</li>
-          <li><strong>Quản lý nhân sự</strong></li>
-          </ul>
+          <h5
+            className={`sidebar-item${activePage === "tasks" ? " selected" : ""}`}
+            onClick={() => setActivePage && setActivePage("tasks")}
+          >
+            Quản lý công việc
+          </h5>
+          <h5
+            className={`sidebar-item${activePage === "employees" ? " selected" : ""}`}
+            onClick={() => setActivePage && setActivePage("employees")}
+          >
+            Quản lý nhân sự
+          </h5>
         </div>
 
         {/* Main Content */}
-        <div className="flex-grow-1 p-3 bg-light overflow-auto">
-          <div className="d-flex justify-content-between align-items-center mb-3">
+        <div className="flex-grow-1 p-3 bg-light overflow-auto fade-page">
+          <form
+            className="d-flex justify-content-between align-items-center mb-3"
+            onSubmit={handleSearch}
+          >
             <div className="input-group">
               <span className="input-group-text bg-white border-end-0">
                 <i className="bi bi-search"></i>
               </span>
-              <input type="text" className="form-control border-start-0" placeholder="Tìm kiếm nhân viên..." />
-              <button className="btn btn-secondary ms-2 me-3" style={{ padding: "10px 20px", borderRadius: "5px" }}>
+              <input
+                type="text"
+                className="form-control border-start-0"
+                placeholder="Tìm kiếm nhân viên..."
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+              />
+              <button
+                className="btn btn-secondary ms-2 me-3"
+                style={{ padding: "10px 20px", borderRadius: "5px" }}
+                type="submit"
+              >
                 Tìm
               </button>
             </div>
@@ -290,7 +377,7 @@ function TaskBoardBootstrap3() {
                 <li><a className="dropdown-item text-danger" href="#">Đăng xuất</a></li>
               </ul>
             </div>
-          </div>
+          </form>
 
           {/* Employee List */}
           <button className="btn btn-primary btn-sm ms-2" onClick={openAddTaskModal}>
@@ -298,7 +385,7 @@ function TaskBoardBootstrap3() {
           </button>
           <div className="border p-3 rounded bg-white">
             <ul className="list-unstyled">
-              {tasksData.map(task => (
+              {filteredTasks.map(task => (
                 <li key={task.id} className="mb-3 border-bottom pb-2">
                   <div className="d-flex justify-content-between align-items-center">
                     <div>

@@ -2,11 +2,7 @@ import React, { useState, useEffect } from "react";
 
 // khởi tạo mẫu ban đầu
 const initialTasks = [
-  { id: 1, title: "Chuẩn bị sự kiện Hội thảo khách hàng", date: "22/04/2024", completed: false, note: "" },
-  { id: 2, title: "Họp với đối tác chiến lược", date: "23/04/2024", completed: false, note: "" },
-  { id: 3, title: "Tổ chức buổi đào tạo nội bộ", date: "25/04/2024", completed: false, note: "" },
-  { id: 4, title: "Xây dựng kế hoạch marketing quý 2", date: "01/05/2024", completed: true, note: "" },
-  { id: 5, title: "Báo cáo kết quả kinh doanh Q1", date: "15/04/2024", completed: true, note: "" }
+
 ];
 
 const subTasksMap = {
@@ -33,50 +29,122 @@ const subTasksMap = {
 };
 
 // API endpoint
-const API_URL = "http://localhost:3000/api/truongnhom"; // Thay đổi nếu backend chạy port khác
+const API_URL = (typeof process !== 'undefined' && process.env.REACT_APP_API_URL)
+	? process.env.REACT_APP_API_URL
+	: "http://localhost:3000/api";
+
+// Helper: extract username from email (e.g. "nta@gmail.com" => "nta")
+function usernameFromEmail(email) {
+  if (!email) return "";
+  return email.split("@")[0];
+}
 
 // Hàm giao tiếp backend
 async function fetchTasks() {
-  const res = await fetch(`${API_URL}/tasks`);
+  const token = localStorage.getItem("token");
+  const headers = token ? { Authorization: `Bearer ${token}` } : {};
+  const res = await fetch(`${API_URL}/tasks`, { headers });
   return res.json();
 }
 
 async function addTask(task) {
+  // Tự động gán assignedTo cho các subTasks nếu tên trùng username của employee
+  // Lấy danh sách user từ backend (chỉ lấy các employee)
+  const token = localStorage.getItem("token");
+  const headers = token ? { Authorization: `Bearer ${token}` } : {};
+  let employees = [];
+  try {
+    const res = await fetch(`${API_URL.replace('/api', '')}/api/quanly`, { headers });
+    if (res.ok) {
+      employees = await res.json();
+    }
+  } catch {}
+  // Tạo map username -> userId cho employee
+  const userMap = {};
+  if (Array.isArray(employees)) {
+    employees.forEach(u => {
+      if (u.role === "employee" && u.email) {
+        userMap[usernameFromEmail(u.email)] = u._id || u.id;
+      }
+    });
+  }
+  // Gán assignedTo cho subTasks nếu tên trùng username
+  let subTasks = Array.isArray(task.subTasks) ? task.subTasks.map(sub => {
+    const uname = usernameFromEmail(sub.assignee);
+    const userId = userMap[uname];
+    return userId
+      ? { ...sub, assignedTo: userId }
+      : sub;
+  }) : [];
+
+  // Nếu task có assignedTo (ví dụ leader muốn giao cả task cho ai đó), giữ nguyên
+  // Nếu không, chỉ subTasks có assignedTo
+  const taskToSend = { ...task, subTasks };
+
   const res = await fetch(`${API_URL}/tasks`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(task)
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    },
+    body: JSON.stringify(taskToSend)
   });
   return res.json();
 }
 
 async function updateTask(taskId, updates) {
+  const token = localStorage.getItem("token");
+  const headers = {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {})
+  };
   const res = await fetch(`${API_URL}/tasks/${taskId}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(updates)
   });
   return res.json();
 }
 
 async function deleteTask(taskId) {
-  await fetch(`${API_URL}/tasks/${taskId}`, { method: "DELETE" });
+  const token = localStorage.getItem("token");
+  const headers = token ? { Authorization: `Bearer ${token}` } : {};
+  await fetch(`${API_URL}/tasks/${taskId}`, { method: "DELETE", headers });
 }
 
 async function addSubTask(taskId, subTask) {
-  const res = await fetch(`${API_URL}/tasks/${taskId}/subtasks`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(subTask)
-  });
-  return res.json();
+  // Nếu backend cần xác thực, truyền token vào headers
+  return subTask;
 }
 
 async function deleteSubTask(taskId, subTaskIndex) {
-  await fetch(`${API_URL}/tasks/${taskId}/subtasks/${subTaskIndex}`, { method: "DELETE" });
+  const token = localStorage.getItem("token");
+  const headers = token ? { Authorization: `Bearer ${token}` } : {};
+  await fetch(`${API_URL}/tasks/${taskId}/subtasks/${subTaskIndex}`, { method: "DELETE", headers });
 }
 
-function TaskBoardBootstrap2() {
+async function addSubSubTask(eventId, subTaskName, subSubTask) {
+  const token = localStorage.getItem("token");
+  if (subSubTask.name && subSubTask.employeeId) {
+    await fetch(
+      `${API_URL}/events/${eventId}/subtask/${encodeURIComponent(subTaskName)}/add-employee-task`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          name: subSubTask.name,
+          employeeId: subSubTask.employeeId,
+          deadline: subSubTask.deadline // truyền deadline cho BE
+        })
+      }
+    );
+  }
+}
+
+function TaskBoardBootstrap2({ setActivePage, activePage, user, onLogout }) {
   const [tasksData, setTasksData] = useState(initialTasks);
   const [stateModal, setStateModal] = useState({ show: false, taskId: null });
   const [noteModal, setNoteModal] = useState({ show: false, taskId: null, note: "" });
@@ -95,27 +163,73 @@ function TaskBoardBootstrap2() {
   const [showAddSubTaskModal, setShowAddSubTaskModal] = useState(false);
   const [currentTaskIdForSubTask, setCurrentTaskIdForSubTask] = useState(null);
   const [newSubTask, setNewSubTask] = useState({ name: "", assignee: "", time: "" });
+  const [error, setError] = useState(null);
+  const [leaderSubTasks, setLeaderSubTasks] = useState([]);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filteredTasks, setFilteredTasks] = useState([]);
+  const [showAddSubSubTaskModal, setShowAddSubSubTaskModal] = useState(false);
+  const [currentEventIdForSubSubTask, setCurrentEventIdForSubSubTask] = useState(null);
+  const [currentSubTaskNameForSubSubTask, setCurrentSubTaskNameForSubSubTask] = useState("");
+  const [newSubSubTask, setNewSubSubTask] = useState({ name: "", employeeId: "", deadline: "" });
 
   // Lấy danh sách công việc từ backend khi load trang
   useEffect(() => {
     fetchTasks()
       .then(data => {
-        setTasksData(data);
+        if (Array.isArray(data)) {
+          setTasksData(data);
+          setError(null);
+        } else {
+          setTasksData([]);
+          setError(data?.message || "Không thể tải công việc");
+        }
       })
       .catch(err => {
-        console.error("Error fetching tasks:", err);
-        // fallback nếu backend chưa sẵn sàng
-        setTasksData(initialTasks);
+        setError("Không thể tải công việc");
+        setTasksData([]);
       });
   }, []);
 
+  useEffect(() => {
+    setFilteredTasks(tasksData);
+  }, [tasksData]);
+
+  const handleSearch = (e) => {
+    e && e.preventDefault && e.preventDefault();
+    if (!searchTerm.trim()) {
+      setFilteredTasks(tasksData);
+      return;
+    }
+    setFilteredTasks(
+      tasksData.filter(
+        t =>
+          (t.title || "")
+            .toLowerCase()
+            .includes(searchTerm.trim().toLowerCase())
+      )
+    );
+  };
+
+  // Lấy subtask được giao cho leader (nếu là leader)
+  useEffect(() => {
+    if (user && user.role === "leader" && user.leaderId) {
+      const token = localStorage.getItem("token");
+      fetch(`${API_URL}/events/leader/${user.leaderId}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+        .then(res => res.json())
+        .then(data => setLeaderSubTasks(Array.isArray(data) ? data : []))
+        .catch(() => setLeaderSubTasks([]));
+    }
+  }, [user]);
+
   const confirmStateUpdate = async () => {
-    const task = tasksData.find(t => t.id === stateModal.taskId);
+    const task = tasksData.find(t => t._id === stateModal.taskId);
     if (task) {
-      await updateTask(task.id, { completed: !task.completed });
+      await updateTask(task._id, { completed: !task.completed });
       setTasksData(prev =>
         prev.map(t =>
-          t.id === task.id ? { ...t, completed: !t.completed } : t
+          t._id === task._id ? { ...t, completed: !t.completed } : t
         )
       );
     }
@@ -127,12 +241,12 @@ function TaskBoardBootstrap2() {
   };
 
   const confirmNoteUpdate = async () => {
-    const task = tasksData.find(t => t.id === noteModal.taskId);
+    const task = tasksData.find(t => t._id === noteModal.taskId);
     if (!task) return;
     await updateTask(noteModal.taskId, { note: noteModal.note });
     setTasksData(prev =>
       prev.map(task =>
-        task.id === noteModal.taskId ? { ...task, note: noteModal.note } : task
+        task._id === noteModal.taskId ? { ...task, note: noteModal.note } : task
       )
     );
     setNoteModal({ show: false, taskId: null, note: "" });
@@ -199,7 +313,7 @@ function TaskBoardBootstrap2() {
 
   const handleDeleteTask = async (taskId) => {
     await deleteTask(taskId);
-    setTasksData(prev => prev.filter(task => task.id !== taskId));
+    setTasksData(prev => prev.filter(task => task._id !== taskId));
   };
 
   const openAddSubTaskModal = (taskId) => {
@@ -211,7 +325,7 @@ function TaskBoardBootstrap2() {
     const savedSubTask = await addSubTask(currentTaskIdForSubTask, newSubTask);
     setTasksData(prev =>
       prev.map(task => {
-        if (task.id === currentTaskIdForSubTask) {
+        if (task._id === currentTaskIdForSubTask) {
           const existingSubs = task.subTasks ? task.subTasks : [];
           return { ...task, subTasks: [...existingSubs, savedSubTask] };
         }
@@ -233,7 +347,7 @@ function TaskBoardBootstrap2() {
     await deleteSubTask(taskId, subTaskIndex);
     setTasksData(prev =>
       prev.map(task => {
-        if (task.id === taskId) {
+        if (task._id === taskId) {
           const newSubs = [...(task.subTasks || [])];
           newSubs.splice(subTaskIndex, 1);
           return { ...task, subTasks: newSubs };
@@ -263,27 +377,75 @@ function TaskBoardBootstrap2() {
           width: 100%;
           box-shadow: 0 4px 12px rgba(0,0,0,0.3);
         }
+        .sidebar-item {
+          border: 2px solid transparent;
+          border-radius: 5px;
+          margin: 5px 0;
+          padding: 10px 16px;
+          transition: background 0.25s, border 0.25s, color 0.25s, box-shadow 0.25s;
+          font-weight: 500;
+          font-size: 1.1rem;
+        }
+        .sidebar-item.selected, .sidebar-item:active {
+          border: 2px solid #fff;
+          background: linear-gradient(90deg, #43e97b 0%, #38f9d7 100%);
+          color: #222;
+          box-shadow: 0 2px 12px rgba(67,233,123,0.15);
+        }
+        .sidebar-item:hover {
+          background: rgba(255,255,255,0.2);
+          color: #fff;
+          cursor: pointer;
+          box-shadow: 0 2px 8px rgba(67,233,123,0.10);
+        }
+        .fade-page {
+          animation: fadeInPage 0.5s;
+        }
+        @keyframes fadeInPage {
+          from { opacity: 0; transform: translateY(20px);}
+          to { opacity: 1; transform: translateY(0);}
+        }
       `}</style>
 
       <div className="d-flex vh-100">
         {/* Sidebar */}
         <div className="bg-success text-white p-3 rounded" style={{ width: '250px' }}>
-          <h5>Quản lý công việc nhóm</h5>
-          <ul className="list-unstyled mt-3 ">
-            <li><strong>Quản lý công việc</strong></li>
-            <li>Quản lý nhân sự</li>
-          </ul>
+          <h5
+            className={`sidebar-item${activePage === "tasks" ? " selected" : ""}`}
+            onClick={() => setActivePage && setActivePage("tasks")}
+          >
+            Quản lý công việc
+          </h5>
+          <h5
+            className={`sidebar-item${activePage === "employees" ? " selected" : ""}`}
+            onClick={() => setActivePage && setActivePage("employees")}
+          >
+            Quản lý nhân sự
+          </h5>
         </div>
 
         {/* Main Content */}
-        <div className="flex-grow-1 p-3 bg-light overflow-auto">
-          <div className="d-flex justify-content-between align-items-center mb-3">
+        <div className="flex-grow-1 p-3 bg-light overflow-auto fade-page">
+          <form
+            className="d-flex justify-content-between align-items-center mb-3"
+            onSubmit={handleSearch}
+          >
             <div className="input-group">
               <span className="input-group-text bg-white border-end-0">
                 <i className="bi bi-search"></i>
               </span>
-              <input type="text" className="form-control border-start-0" placeholder="Tìm kiếm công việc..." />
-              <button className="btn btn-secondary ms-2 me-3" style={{ padding: "10px 20px", borderRadius: "5px" }}>
+              <input
+                type="text"
+                className="form-control border-start-0"
+                placeholder="Tìm kiếm công việc..."
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+              />
+              <button
+                className="btn btn-secondary ms-2 me-3"
+                style={{ padding: "10px 20px", borderRadius: "5px" }}
+                type="submit"
+              >
                 Tìm
               </button>
             </div>
@@ -307,85 +469,209 @@ function TaskBoardBootstrap2() {
                 <li className="px-3 pt-2 pb-1 text-muted small">Quản lý tài khoản</li>
                 <li><hr className="dropdown-divider" /></li>
                 <li><a className="dropdown-item" href="#">Quản lý tài khoản</a></li>
-                <li><a className="dropdown-item text-danger" href="#">Đăng xuất</a></li>
+                <li>
+                  <button className="dropdown-item text-danger" onClick={onLogout}>Đăng xuất</button>
+                </li>
               </ul>
             </div>
-          </div>
+          </form>
 
           {/* Task List */}
           <button className="btn btn-primary btn-sm ms-2" onClick={openAddTaskModal}>
             Thêm công việc mới
           </button>
           <div className="border p-3 rounded bg-white">
-            <ul className="list-unstyled">
-              {tasksData.map(task => (
-                <li key={task.id} className="mb-3 border-bottom pb-2">
-                  <div className="d-flex justify-content-between align-items-center">
-                    <div>
-                      <strong>{task.title}</strong>
-                      <span className="text-muted ms-2">({task.date})</span>
-                      {task.completed && <span className="badge bg-success ms-2">Hoàn thành</span>}
+            {error ? (
+              <div className="alert alert-danger">{error}</div>
+            ) : Array.isArray(filteredTasks) ? (
+              <ul className="list-unstyled">
+                {filteredTasks.map(task => (
+                  <li key={task._id} className="mb-3 border-bottom pb-2">
+                    <div className="d-flex justify-content-between align-items-center">
+                      <div>
+                        <strong>{task.title}</strong>
+                        <span className="text-muted ms-2">({task.date})</span>
+                        {task.completed && <span className="badge bg-success ms-2">Hoàn thành</span>}
+                      </div>
+                      <div>
+                        <button
+                          className="btn btn-success btn-sm me-2"
+                          onClick={() => setStateModal({ show: true, taskId: task._id })}
+                        >
+                          Hoàn thành
+                        </button>
+                        <button
+                          className="btn btn-danger btn-sm me-2"
+                          onClick={() => handleDeleteTask(task._id)}
+                        >
+                          Xóa Công Việc
+                        </button>
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={() => openAddSubTaskModal(task._id)}
+                        >
+                          +
+                        </button>
+                      </div>
                     </div>
-                    <div>
-                      <button
-                        className="btn btn-success btn-sm me-2"
-                        onClick={() => setStateModal({ show: true, taskId: task.id })}
-                      >
-                        Hoàn thành
-                      </button>
-                      <button
-                        className="btn btn-danger btn-sm me-2"
-                        onClick={() => handleDeleteTask(task.id)}
-                      >
-                        Xóa Công Việc
-                      </button>
-                      <button
-                        className="btn btn-primary btn-sm"
-                        onClick={() => openAddSubTaskModal(task.id)}
-                      >
-                        +
-                      </button>
-                    </div>
-                  </div>
 
-                  {/* Subtasks */}
-                  <ul className="list-unstyled ms-3 mt-2">
-                    {(task.subTasks || subTasksMap[task.id])?.map((sub, index) => {
-                      const key = `${task.id}-${index}`;
-                      return (
-                        <React.Fragment key={key}>
-                          <li
-                            className="d-flex justify-content-between align-items-center mt-2"
-                            onClick={() => toggleSubTask(task.id, index)}
-                            style={{ cursor: "pointer" }}
-                          >
-                            <span>{sub.name}</span>
-                            <div>
-                              <input type="checkbox" className="form-check-input me-2" />
+                    {/* Subtasks */}
+                    <ul className="list-unstyled ms-3 mt-2">
+                      {(task.subTasks || subTasksMap[task._id])?.map((sub, index) => {
+                        const key = `${task._id}-${sub.name || ""}-${index}`;
+                        return (
+                          <React.Fragment key={key}>
+                            <li
+                              className="d-flex justify-content-between align-items-center mt-2"
+                              onClick={() => toggleSubTask(task._id, index)}
+                              style={{ cursor: "pointer" }}
+                            >
+                              <span>{sub.name}</span>
+                              <div>
+                                <input type="checkbox" className="form-check-input me-2" />
+                                <button
+                                  className="btn btn-danger btn-sm"
+                                  onClick={e => {
+                                    e.stopPropagation();
+                                    handleDeleteSubTask(task._id, index);
+                                  }}
+                                >
+                                  Xóa
+                                </button>
+                              </div>
+                            </li>
+                            {expandedSubTasks[key] && (
+                              <li className="ms-5 mt-1 small text-muted" key={key + "-detail"}>
+                                <em>Tên nhân viên:</em> {sub.assignee}, <em>Thời gian:</em> {sub.time}
+                              </li>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </ul>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="alert alert-danger">Không thể tải danh sách công việc.</div>
+            )}
+          </div>
+
+          {/* Hiển thị các subtask được giao cho leader */}
+          {user && user.role === "leader" && leaderSubTasks.length > 0 && (
+            <div className="mt-4 border p-3 rounded bg-white">
+              <h5>Công việc sự kiện được giao cho bạn (theo mã quản lý)</h5>
+              {leaderSubTasks.map(ev => (
+                <div key={ev.eventId} className="mb-3">
+                  <div className="fw-bold mb-1">{ev.eventName}</div>
+                  <ul className="list-group list-group-flush">
+                    {/* Loại bỏ subtask trùng lặp theo name + leaderId */}
+                    {Array.isArray(ev.subTasks) && ev.subTasks
+                      .filter(
+                        (sub, idx, arr) =>
+                          typeof sub.leaderId === "string" &&
+                          sub.leaderId.trim() !== "" &&
+                          sub.leaderId === user.leaderId &&
+                          arr.findIndex(s => s.name === sub.name && s.leaderId === sub.leaderId) === idx
+                      )
+                      .map((sub, idx) => (
+                        <li key={sub.name + idx} className="list-group-item">
+                          <div className="d-flex justify-content-between align-items-center">
+                            <span className="fw-semibold">{sub.name}</span>
+                            <div className="d-flex align-items-center gap-2">
+                              <span className={`badge ${sub.status === "done" ? "bg-success" : "bg-warning text-dark"} me-2`}>
+                                {sub.status === "done" ? "Đã xong" : "Chưa xong"}
+                              </span>
+                              <input
+                                type="checkbox"
+                                checked={sub.status === "done"}
+                                onChange={async (e) => {
+                                  // Gọi API cập nhật trạng thái subtask
+                                  try {
+                                    const token = localStorage.getItem("token");
+                                    await fetch(
+                                      `${API_URL}/events/leader/${user.leaderId}/subtask-status`,
+                                      {
+                                        method: "PUT",
+                                        headers: {
+                                          "Content-Type": "application/json",
+                                          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                                        },
+                                        body: JSON.stringify({
+                                          eventId: ev.eventId,
+                                          subTaskName: sub.name,
+                                          status: e.target.checked ? "done" : "pending",
+                                        }),
+                                      }
+                                    );
+                                    // Sau khi cập nhật, reload lại danh sách subtask
+                                    fetch(`${API_URL}/events/leader/${user.leaderId}`, {
+                                      headers: token ? { Authorization: `Bearer ${token}` } : {},
+                                    })
+                                      .then(res => res.json())
+                                      .then(data => setLeaderSubTasks(Array.isArray(data) ? data : []));
+                                  } catch {}
+                                }}
+                                title="Đánh dấu hoàn thành"
+                              />
                               <button
-                                className="btn btn-danger btn-sm"
-                                onClick={e => {
-                                  e.stopPropagation();
-                                  handleDeleteSubTask(task.id, index);
+                                className="btn btn-sm btn-outline-primary"
+                                onClick={() => {
+                                  setCurrentEventIdForSubSubTask(ev.eventId);
+                                  setCurrentSubTaskNameForSubSubTask(sub.name);
+                                  setNewSubSubTask({ name: "", employeeId: "", deadline: "" });
+                                  setShowAddSubSubTaskModal(true);
                                 }}
                               >
-                                Xóa
+                                Thêm công việc con
                               </button>
                             </div>
-                          </li>
-                          {expandedSubTasks[key] && (
-                            <li className="ms-5 mt-1 small text-muted">
-                              <em>Tên nhân viên:</em> {sub.assignee}, <em>Thời gian:</em> {sub.time}
-                            </li>
+                          </div>
+                          {/* Hiển thị công việc con mới được tạo từ leader */}
+                          {Array.isArray(sub.employeeTasks) && sub.employeeTasks.length > 0 && (
+                            <div className="mt-2 mb-1 ps-4">
+                              <div
+                                style={{
+                                  borderLeft: "4px solid #0d6efd",
+                                  background: "#eaf4ff",
+                                  borderRadius: "6px",
+                                  padding: "10px 14px",
+                                  marginLeft: "8px"
+                                }}
+                              >
+                                <div className="mb-1 fw-bold text-primary" style={{ fontSize: "0.98em" }}>
+                                  Công việc con được giao cho nhân viên:
+                                </div>
+                                <ul className="mb-0 ps-3" style={{ listStyle: "circle" }}>
+                                  {sub.employeeTasks.map((empTask, empIdx) => (
+                                    <li
+                                      key={empTask.name + empIdx}
+                                      className="py-1"
+                                      style={{
+                                        fontSize: "0.97em",
+                                        marginBottom: "2px"
+                                      }}
+                                    >
+                                      <span className="fw-semibold text-dark">{empTask.name}</span>
+                                      {empTask.deadline && (
+                                        <span className="ms-2 text-muted small">({empTask.deadline})</span>
+                                      )}
+                                      {empTask.employeeId && (
+                                        <span className="ms-2 badge bg-info text-dark">Mã NV: {empTask.employeeId}</span>
+                                      )}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            </div>
                           )}
-                        </React.Fragment>
-                      );
-                    })}
+                        </li>
+                      ))}
                   </ul>
-                </li>
+                </div>
               ))}
-            </ul>
-          </div>
+            </div>
+          )}
 
           {/* Events Section */}
           {eventsData.length > 0 && (
@@ -590,6 +876,76 @@ function TaskBoardBootstrap2() {
                 Hủy
               </button>
               <button className="btn btn-primary" onClick={confirmAddSubTask}>
+                Thêm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Sub-SubTask Modal */}
+      {showAddSubSubTaskModal && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <h5>Thêm công việc con cho nhân viên</h5>
+            <div className="mb-3">
+              <input
+                type="text"
+                className="form-control"
+                placeholder="Tên công việc con"
+                value={newSubSubTask.name}
+                onChange={e => setNewSubSubTask({ ...newSubSubTask, name: e.target.value })}
+              />
+            </div>
+            <div className="mb-3">
+              <input
+                type="text"
+                className="form-control"
+                placeholder="Mã nhân viên (employeeId)"
+                value={newSubSubTask.employeeId}
+                onChange={e => setNewSubSubTask({ ...newSubSubTask, employeeId: e.target.value })}
+              />
+            </div>
+            <div className="mb-3">
+              <input
+                type="text"
+                className="form-control"
+                placeholder="Hạn (deadline, ví dụ: 2024-06-30)"
+                value={newSubSubTask.deadline}
+                onChange={e => setNewSubSubTask({ ...newSubSubTask, deadline: e.target.value })}
+              />
+            </div>
+            <div className="d-flex justify-content-end">
+              <button
+                className="btn btn-secondary me-2"
+                onClick={() => {
+                  setShowAddSubSubTaskModal(false);
+                  setNewSubSubTask({ name: "", employeeId: "", deadline: "" });
+                }}
+              >
+                Hủy
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={async () => {
+                  await addSubSubTask(
+                    currentEventIdForSubSubTask,
+                    currentSubTaskNameForSubSubTask,
+                    newSubSubTask
+                  );
+                  setShowAddSubSubTaskModal(false);
+                  setNewSubSubTask({ name: "", employeeId: "", deadline: "" });
+                  // Reload lại danh sách subtask leader
+                  if (user && user.role === "leader" && user.leaderId) {
+                    const token = localStorage.getItem("token");
+                    fetch(`${API_URL}/events/leader/${user.leaderId}`, {
+                      headers: token ? { Authorization: `Bearer ${token}` } : {},
+                    })
+                      .then(res => res.json())
+                      .then(data => setLeaderSubTasks(Array.isArray(data) ? data : []));
+                  }
+                }}
+              >
                 Thêm
               </button>
             </div>
